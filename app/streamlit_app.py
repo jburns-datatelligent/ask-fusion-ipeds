@@ -145,12 +145,6 @@ def footer() -> None:
 def resolve_lead() -> None:
     if ss.lead is None:
         ss.lead = gate.read_token(st.query_params.get("t"), S.app_secret)
-    if ss.lead is None and not S.require_contact:
-        # Form switched off: an anonymous visitor, one per browser session. The question log still
-        # records every question; lead_key 'anon-...' marks those asked without a contact form, and
-        # the per-person cap becomes per session (the site-wide cap still bounds spend).
-        ss.lead = {"lead_id": None, "lead_key": f"anon-{ss.session_id}", "first_name": "", "organization": "",
-                   "anonymous": True}
     if ss.lead and ss.used_today is None:
         ss.used_today = store().questions_today(ss.lead["lead_key"])
 
@@ -182,7 +176,10 @@ def render_gate() -> None:
     with right:
         with st.form("lead_form", border=False):
             st.html('<p class="af-form-title">Start asking, free</p>'
-                    '<p class="af-form-sub">Tell us who you are and you&rsquo;re in. It takes 20 seconds.</p>')
+                    '<p class="af-form-sub">Tell us who you are and you&rsquo;re in. It takes 20 seconds.</p>'
+                    + ('' if S.require_contact else
+                       '<p class="af-form-sub"><b>Optional during the preview:</b> leave it blank and press '
+                       'Start asking.</p>'))
             c1, c2 = st.columns(2)
             first = c1.text_input("First name", max_chars=100, autocomplete="given-name")
             last = c2.text_input("Last name", max_chars=100, autocomplete="family-name")
@@ -198,11 +195,20 @@ def render_gate() -> None:
         if submitted:
             form = {"first_name": first, "last_name": last, "email": email, "organization": org,
                     "job_role": role, "consent": consent}
-            errors = gate.validate(form)
+            errors = gate.validate(form, required=S.require_contact)
             if errors:
                 for msg in errors.values():
                     st.error(msg)
                 return
+            if not email.strip():
+                # Optional form left without an email: in as an anonymous visitor, one per browser
+                # session. Nothing goes to the leads table; every question is still logged, under
+                # lead_key 'anon-...', and the per-person cap becomes per session (the site-wide
+                # cap still bounds spend). No sign-in link, so a reload shows the form again.
+                ss.lead = {"lead_id": None, "lead_key": f"anon-{ss.session_id}", "anonymous": True,
+                           "first_name": first.strip()[:40], "organization": org.strip()[:80]}
+                ss.used_today = store().questions_today(ss.lead["lead_key"])
+                st.rerun()
             lead = {k: (v.strip() if isinstance(v, str) else v) for k, v in form.items() if k != "consent"}
             lead.update(lead_id=uuid.uuid4().hex, lead_key=lead_key(email), consent_text=CONSENT_TEXT,
                         referrer=st.context.headers.get("Referer"),

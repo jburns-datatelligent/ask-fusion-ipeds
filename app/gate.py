@@ -22,22 +22,29 @@ FREEMAIL = {"gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "icloud.com"
             "proton.me", "protonmail.com", "live.com", "msn.com", "me.com"}
 
 
-def validate(form: dict) -> dict[str, str]:
-    """Return {field: problem}; empty means the form is good."""
+def validate(form: dict, required: bool = True) -> dict[str, str]:
+    """Return {field: problem}; empty means the form is good.
+
+    required=False (APP_REQUIRE_CONTACT=false) makes every field optional, but what IS entered is
+    still checked, and an email is only ever kept with consent: a contact detail stored without
+    agreement is the one thing the optional form must not allow.
+    """
     errors = {}
     for f, name in (("first_name", "first name"), ("last_name", "last name"),
                     ("organization", "institution or organization")):
         if not (form.get(f) or "").strip():
-            errors[f] = f"Please enter your {name}."
+            if required:
+                errors[f] = f"Please enter your {name}."
         elif len(form[f].strip()) > 200:
             errors[f] = "That is longer than we can store."
     email = (form.get("email") or "").strip()
-    if not EMAIL.match(email) or len(email) > 254:
+    if (required or email) and (not EMAIL.match(email) or len(email) > 254):
         errors["email"] = "Please enter a valid email address."
-    if not form.get("job_role"):
+    if required and not form.get("job_role"):
         errors["job_role"] = "Please choose the role closest to yours."
-    if not form.get("consent"):
-        errors["consent"] = "Please agree so we can give you access."
+    if not form.get("consent") and (required or email):
+        errors["consent"] = ("Please agree so we can give you access." if required else
+                             "Please agree, or leave the email blank, so we know we may keep it.")
     return errors
 
 
