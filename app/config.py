@@ -36,6 +36,7 @@ class Settings:
     history_turns: int         # prior turns sent with a follow-up
     cta_url: str
     privacy_url: str
+    require_contact: bool      # False: visitors ask without the contact form (demos and testing)
 
     @classmethod
     def load(cls) -> "Settings":
@@ -52,6 +53,8 @@ class Settings:
             history_turns=int(e("APP_HISTORY_TURNS", "4")),
             cta_url=e("APP_CTA_URL", "https://datatelligent.ai"),
             privacy_url=e("APP_PRIVACY_URL", "https://datatelligent.ai"),
+            # Required unless switched off explicitly: a typo must not quietly open the site.
+            require_contact=e("APP_REQUIRE_CONTACT", "true").strip().lower() not in {"false", "0", "no", "off"},
         )
 
 

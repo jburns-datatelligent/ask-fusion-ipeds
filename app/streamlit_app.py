@@ -143,6 +143,12 @@ def footer() -> None:
 def resolve_lead() -> None:
     if ss.lead is None:
         ss.lead = gate.read_token(st.query_params.get("t"), S.app_secret)
+    if ss.lead is None and not S.require_contact:
+        # Form switched off: an anonymous visitor, one per browser session. The question log still
+        # records every question; lead_key 'anon-...' marks those asked without a contact form, and
+        # the per-person cap becomes per session (the site-wide cap still bounds spend).
+        ss.lead = {"lead_id": None, "lead_key": f"anon-{ss.session_id}", "first_name": "", "organization": "",
+                   "anonymous": True}
     if ss.lead and ss.used_today is None:
         ss.used_today = store().questions_today(ss.lead["lead_key"])
 
@@ -410,7 +416,8 @@ def run_pending() -> None:
 
 def render_welcome() -> None:
     lead = ss.lead
-    st.html(f'<div class="af-welcome"><h2>Welcome, {esc(lead.get("first_name") or "there")}.</h2>'
+    greeting = f'Welcome, {esc(lead["first_name"])}.' if lead.get("first_name") else "Ask anything about U.S. colleges."
+    st.html(f'<div class="af-welcome"><h2>{greeting}</h2>'
             '<p>Ask a question the way you would ask your IR office. Start with one of these, or type your own below.</p></div>')
     tabs = st.tabs([name for _, name in AUDIENCES])
     groups = starters()
@@ -471,10 +478,12 @@ if ss.messages:
         st.button("+ New conversation", type="tertiary", on_click=new_conversation, disabled=bool(ss.pending))
 with top_m:
     left_today = max(S.per_lead_daily - (ss.used_today or 0), 0)
-    who = esc(ss.lead.get("first_name", "")) + (f" &middot; {esc(ss.lead['organization'])}" if ss.lead.get("organization") else "")
-    st.html(f'<div class="af-quota">{who} &middot; {left_today} of {S.per_lead_daily} questions left today</div>')
-with top_r:
-    st.button("Sign out", type="tertiary", on_click=sign_out, key="signout", disabled=bool(ss.pending))
+    parts = [esc(ss.lead.get(k) or "") for k in ("first_name", "organization")]
+    parts.append(f"{left_today} of {S.per_lead_daily} questions left today")
+    st.html(f'<div class="af-quota">{" &middot; ".join(p for p in parts if p)}</div>')
+if not ss.lead.get("anonymous"):
+    with top_r:
+        st.button("Sign out", type="tertiary", on_click=sign_out, key="signout", disabled=bool(ss.pending))
 
 # The conversation is a container created here but filled at the end, so everything below it is
 # drawn BEFORE the 30-60s agent call. Otherwise the previous screen's content sits under the
