@@ -1,0 +1,21 @@
+# Read from the working directory: run `streamlit run streamlit_app.py` from ipeds_demo/app
+# (the Dockerfile does).
+[theme]
+base = "light"
+primaryColor = "#4a6471"
+backgroundColor = "#f5f7f8"
+secondaryBackgroundColor = "#ffffff"
+textColor = "#364853"
+font = "sans serif"
+
+[client]
+toolbarMode = "minimal"
+showErrorDetails = "none"   # a stack trace is not something to show the public
+
+[browser]
+gatherUsageStats = false
+
+[server]
+headless = true
+enableXsrfProtection = true
+maxUploadSize = 1

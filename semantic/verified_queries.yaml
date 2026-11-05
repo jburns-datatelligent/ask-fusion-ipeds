@@ -1,0 +1,639 @@
+# Verified questions for the IPEDS demo.
+#
+# Each becomes a Cortex Analyst verified query on AF_IPEDS_SEMANTIC (deploy_semantic.py strips
+# the keys Snowflake does not accept: audience, chips, notes), and each is a suggested question
+# on the website. SQL uses logical table names (__institution, ...) whose columns equal the
+# physical AF_* view columns, so tests/test_verified_queries.py executes every one live.
+#
+# Conventions every query follows, because the generated SQL is graded against them:
+#   - pooled rates across institutions (sum of numerators / sum of denominators)
+#   - a minimum denominator before ranking on a rate
+#   - is_reporting_institution = TRUE whenever institutions are counted or ranked
+#   - net price summarised by MEDIAN within one control, never across public and private
+#   - the period stated, because IPEDS_YEAR means a different period per table
+
+verified_queries:
+  - name: enrollment_trend_by_sector
+    audience: presidents
+    question: How has fall enrollment changed by sector from 2019 to 2023?
+    notes: Additive headcount; administrative units excluded.
+    sql: |
+      SELECT i.sector, e.ipeds_year AS fall, SUM(e.total_enrollment) AS total_enrollment
+      FROM __fall_enrollment AS e
+      JOIN __institution AS i ON i.unitid = e.unitid AND i.ipeds_year = e.ipeds_year
+      WHERE i.is_reporting_institution = TRUE
+      GROUP BY i.sector, e.ipeds_year
+      ORDER BY i.sector, fall
+
+  - name: pell_grad_rate_private_nonprofit
+    audience: presidents
+    question: Which private nonprofit 4-year colleges have the highest graduation rates for Pell Grant recipients?
+    notes: Cohort floor 500 and at least 50 Pell recipients. 2023 reports the fall 2017 entering cohort.
+    sql: |
+      SELECT i.institution_name, i.state, g.grad_rate_pell_pct, g.grad_rate_150_pct,
+             g.adjusted_cohort, g.cohort_entry_year
+      FROM __graduation AS g
+      JOIN __institution AS i ON i.unitid = g.unitid AND i.ipeds_year = g.ipeds_year
+      WHERE g.ipeds_year = 2023
+        AND i.sector = 'Private not-for-profit, 4-year or above'
+        AND i.is_reporting_institution = TRUE
+        AND g.adjusted_cohort >= 500
+        AND g.pell_cohort >= 50
+        AND g.data_quality IS NULL
+        AND g.grad_rate_pell_pct IS NOT NULL
+      ORDER BY g.grad_rate_pell_pct DESC, g.adjusted_cohort DESC, i.institution_name
+      LIMIT 15
+
+  - name: pell_gap_public_universities
+    audience: presidents
+    question: Where is the graduation gap between Pell and non-Pell students largest among public universities?
+    notes: Comparison group is students with neither Pell nor a subsidized loan, as NCES reports it.
+    sql: |
+      SELECT i.institution_name, i.state, g.grad_rate_pell_pct, g.grad_rate_no_pell_no_loan_pct,
+             g.grad_rate_no_pell_no_loan_pct - g.grad_rate_pell_pct AS pell_gap_pts,
+             g.adjusted_cohort
+      FROM __graduation AS g
+      JOIN __institution AS i ON i.unitid = g.unitid AND i.ipeds_year = g.ipeds_year
+      WHERE g.ipeds_year = 2023
+        AND i.sector = 'Public, 4-year or above'
+        AND i.is_reporting_institution = TRUE
+        AND g.adjusted_cohort >= 1000
+        AND g.pell_cohort >= 50 AND g.no_pell_no_loan_cohort >= 50
+        AND g.data_quality IS NULL
+        AND g.grad_rate_pell_pct IS NOT NULL
+        AND g.grad_rate_no_pell_no_loan_pct IS NOT NULL
+      ORDER BY pell_gap_pts DESC, g.adjusted_cohort DESC, i.institution_name
+      LIMIT 15
+
+  - name: hbcu_graduation_comparison
+    audience: presidents
+    question: How do HBCU graduation rates compare with other 4-year institutions?
+    notes: Pooled rate, split by control, because a public-vs-private mix difference would otherwise drive the comparison.
+    sql: |
+      SELECT IFF(i.is_hbcu, 'HBCU', 'Not HBCU') AS group_name, i.control,
+             COUNT(DISTINCT g.unitid) AS institutions,
+             SUM(g.adjusted_cohort) AS cohort_students,
+             ROUND(100 * SUM(g.completers_150) / NULLIF(SUM(g.adjusted_cohort), 0), 1) AS grad_rate_150
+      FROM __graduation AS g
+      JOIN __institution AS i ON i.unitid = g.unitid AND i.ipeds_year = g.ipeds_year
+      WHERE g.ipeds_year = 2023
+        AND i.institution_level = 'Four or more years'
+        AND i.control IN ('Public', 'Private not-for-profit')
+        AND i.is_reporting_institution = TRUE
+      GROUP BY group_name, i.control
+      ORDER BY i.control, group_name
+
+  - name: test_optional_trend
+    audience: enrollment
+    question: How has the share of test-optional colleges changed since 2019?
+    notes: The policy item was re-coded in 2022; only Required and Test optional compare across that boundary.
+    sql: |
+      SELECT a.ipeds_year AS fall, a.test_policy,
+             COUNT(*) AS institutions,
+             ROUND(100 * COUNT(*) / SUM(COUNT(*)) OVER (PARTITION BY a.ipeds_year), 1) AS pct_of_reporting
+      FROM __admissions AS a
+      JOIN __institution AS i ON i.unitid = a.unitid AND i.ipeds_year = a.ipeds_year
+      WHERE i.is_reporting_institution = TRUE
+        AND a.test_policy IS NOT NULL
+      GROUP BY a.ipeds_year, a.test_policy
+      ORDER BY fall, institutions DESC
+
+  - name: first_time_change_by_state
+    audience: enrollment
+    question: Which states lost the most first-time undergraduates between fall 2019 and fall 2023?
+    notes: States with at least 5,000 first-time students in 2019.
+    sql: |
+      WITH s AS (
+        SELECT i.state,
+               SUM(IFF(e.ipeds_year = 2019, e.first_time_undergrad_enrollment, 0)) AS fall_2019,
+               SUM(IFF(e.ipeds_year = 2023, e.first_time_undergrad_enrollment, 0)) AS fall_2023
+        FROM __fall_enrollment AS e
+        JOIN __institution AS i ON i.unitid = e.unitid AND i.ipeds_year = e.ipeds_year
+        WHERE e.ipeds_year IN (2019, 2023) AND i.is_reporting_institution = TRUE
+        GROUP BY i.state
+      )
+      SELECT state, fall_2019, fall_2023, fall_2023 - fall_2019 AS change,
+             ROUND(100 * (fall_2023 - fall_2019) / fall_2019, 1) AS pct_change
+      FROM s
+      WHERE fall_2019 >= 5000
+      ORDER BY pct_change, state
+      LIMIT 15
+
+  - name: selective_college_yield
+    audience: enrollment
+    question: Which highly selective colleges have the highest yield?
+    notes: Admit rate under 20% and at least 5,000 applicants, fall 2023.
+    sql: |
+      SELECT i.institution_name, i.state, a.applicants, a.admit_rate_pct, a.yield_rate_pct, a.enrolled
+      FROM __admissions AS a
+      JOIN __institution AS i ON i.unitid = a.unitid AND i.ipeds_year = a.ipeds_year
+      WHERE a.ipeds_year = 2023
+        AND i.is_reporting_institution = TRUE
+        AND a.admit_rate_pct < 20
+        AND a.applicants >= 5000
+        AND a.data_quality IS NULL
+      ORDER BY a.yield_rate_pct DESC, a.applicants DESC, i.institution_name
+      LIMIT 15
+
+  - name: admit_and_yield_by_sector
+    audience: enrollment
+    question: What are admit rates and yield by sector for fall 2023?
+    notes: Pooled rates, so large institutions weigh by their size.
+    sql: |
+      SELECT i.sector,
+             COUNT(DISTINCT a.unitid) AS institutions,
+             SUM(a.applicants) AS applicants,
+             ROUND(100 * SUM(a.admits) / NULLIF(SUM(a.applicants), 0), 1) AS admit_rate,
+             ROUND(100 * SUM(a.enrolled) / NULLIF(SUM(a.admits), 0), 1) AS yield_rate
+      FROM __admissions AS a
+      JOIN __institution AS i ON i.unitid = a.unitid AND i.ipeds_year = a.ipeds_year
+      WHERE a.ipeds_year = 2023 AND i.is_reporting_institution = TRUE
+      GROUP BY i.sector
+      HAVING SUM(a.applicants) > 0
+      ORDER BY applicants DESC
+
+  - name: net_price_low_income
+    audience: ir
+    question: What do families earning under $30,000 pay at public versus private 4-year colleges?
+    notes: Median of institutional averages, 2022-23 aid year. Public covers in-state students only.
+    sql: |
+      SELECT i.control, f.net_price_basis,
+             COUNT(f.net_price_income_0_30k) AS institutions,
+             MEDIAN(f.net_price_income_0_30k) AS median_net_price_income_0_30k,
+             MEDIAN(f.avg_net_price) AS median_net_price_all_incomes
+      FROM __financial_aid AS f
+      JOIN __institution AS i ON i.unitid = f.unitid AND i.ipeds_year = f.ipeds_year
+      WHERE f.ipeds_year = 2023
+        AND i.institution_level = 'Four or more years'
+        AND i.control IN ('Public', 'Private not-for-profit')
+        AND i.is_reporting_institution = TRUE
+        AND f.net_price_basis IS NOT NULL
+      GROUP BY i.control, f.net_price_basis
+      ORDER BY i.control
+
+  - name: retention_top_public
+    audience: ir
+    question: Which public universities have the highest first-year retention?
+    notes: Full-time cohort of at least 1,000. 2023 is the fall 2022 cohort returning in fall 2023.
+    sql: |
+      SELECT i.institution_name, i.state, r.ft_retention_rate_pct, r.ft_cohort, r.cohort_fall
+      FROM __retention AS r
+      JOIN __institution AS i ON i.unitid = r.unitid AND i.ipeds_year = r.ipeds_year
+      WHERE r.ipeds_year = 2023
+        AND i.sector = 'Public, 4-year or above'
+        AND i.is_reporting_institution = TRUE
+        AND r.ft_cohort >= 1000
+        AND r.data_quality IS NULL
+      ORDER BY r.ft_retention_rate_pct DESC, r.ft_cohort DESC, i.institution_name
+      LIMIT 15
+
+  - name: pell_share_trend_by_sector
+    audience: ir
+    question: How has the share of undergraduates receiving Pell Grants changed by sector?
+    notes: Pooled share by aid year.
+    sql: |
+      SELECT i.sector, f.aid_year,
+             ROUND(100 * SUM(f.pell_recipients) / NULLIF(SUM(f.undergrads), 0), 1) AS pell_share
+      FROM __financial_aid AS f
+      JOIN __institution AS i ON i.unitid = f.unitid AND i.ipeds_year = f.ipeds_year
+      WHERE i.is_reporting_institution = TRUE
+        AND i.sector IN ('Public, 4-year or above', 'Private not-for-profit, 4-year or above',
+                         'Public, 2-year', 'Private for-profit, 4-year or above')
+      GROUP BY i.sector, f.aid_year
+      ORDER BY i.sector, f.aid_year
+
+  - name: undergrad_growth_large_institutions
+    audience: ir
+    question: Which large universities grew undergraduate enrollment the most since fall 2019?
+    notes: >-
+      At least 5,000 undergraduates in 2019. Institutions whose reporting unit changed between
+      2019 and 2023 are excluded: consolidations (Dallas College, +414%) and parent/branch
+      reporting changes (Penn State Main Campus reported every campus in fall 2019).
+    sql: |
+      SELECT i23.institution_name, i23.state, i23.sector,
+             e19.undergrad_enrollment AS fall_2019, e23.undergrad_enrollment AS fall_2023,
+             ROUND(100 * (e23.undergrad_enrollment - e19.undergrad_enrollment) / e19.undergrad_enrollment, 1) AS pct_change
+      FROM __fall_enrollment AS e23
+      JOIN __fall_enrollment AS e19 ON e19.unitid = e23.unitid AND e19.ipeds_year = 2019
+      JOIN __institution AS i23 ON i23.unitid = e23.unitid AND i23.ipeds_year = e23.ipeds_year
+      WHERE e23.ipeds_year = 2023
+        AND i23.is_reporting_institution = TRUE
+        AND i23.comparable_2019_2023 = TRUE
+        AND e19.undergrad_enrollment >= 5000
+      ORDER BY pct_change DESC, i23.institution_name
+      LIMIT 15
+
+  - name: indiana_public_outcomes
+    audience: ir
+    question: How do Indiana's public universities compare on retention and graduation?
+    notes: Example of a state peer view. Retention is the fall 2022 cohort; graduation the fall 2017 cohort.
+    sql: |
+      SELECT i.institution_name, e.total_enrollment, r.ft_retention_rate_pct, g.grad_rate_150_pct,
+             g.grad_rate_pell_pct, f.avg_net_price
+      FROM __institution AS i
+      LEFT JOIN __fall_enrollment AS e ON e.unitid = i.unitid AND e.ipeds_year = i.ipeds_year
+      LEFT JOIN __retention AS r ON r.unitid = i.unitid AND r.ipeds_year = i.ipeds_year
+      LEFT JOIN __graduation AS g ON g.unitid = i.unitid AND g.ipeds_year = i.ipeds_year
+      LEFT JOIN __financial_aid AS f ON f.unitid = i.unitid AND f.ipeds_year = i.ipeds_year
+      WHERE i.ipeds_year = 2023
+        AND i.state = 'IN'
+        AND i.sector = 'Public, 4-year or above'
+        AND i.is_reporting_institution = TRUE
+      ORDER BY e.total_enrollment DESC NULLS LAST, i.institution_name
+      LIMIT 25
+
+  - name: state_sector_enrollment_trend
+    audience: enrollment
+    question: How has fall enrollment at Indiana's private nonprofit 4-year colleges changed from 2019 to 2023?
+    notes: >-
+      The opening move of a chained trend conversation. Sums every institution in each year,
+      including ones that opened or closed, so the total is the sector's real headcount. An
+      inner join on both years once silently dropped institutions and reported 83,668 -> 90,675
+      instead of 86,833 -> 92,882 for the same question.
+    sql: |
+      SELECT e.ipeds_year AS fall,
+             COUNT(DISTINCT e.unitid) AS institutions,
+             SUM(e.total_enrollment) AS total_enrollment,
+             SUM(e.undergrad_enrollment) AS undergrad_enrollment,
+             SUM(e.grad_enrollment) AS grad_enrollment
+      FROM __fall_enrollment AS e
+      JOIN __institution AS i ON i.unitid = e.unitid AND i.ipeds_year = e.ipeds_year
+      WHERE i.state = 'IN'
+        AND i.sector = 'Private not-for-profit, 4-year or above'
+        AND i.is_reporting_institution = TRUE
+      GROUP BY e.ipeds_year
+      ORDER BY fall
+
+  # ---- One institution --------------------------------------------------------------------
+  - name: institution_profile
+    audience: presidents
+    question: Give me a profile of Purdue University.
+    notes: >-
+      Pattern for any single-institution question. Matches the name, and when several campuses
+      match, the main campus is the one whose name is exact. Every figure states its own period.
+    sql: |
+      SELECT i.institution_name, i.state, i.sector, i.carnegie_basic,
+             e.total_enrollment, e.undergrad_enrollment,
+             a.admit_rate_pct, a.yield_rate_pct, a.test_policy,
+             r.ft_retention_rate_pct, r.cohort_fall AS retention_cohort_fall,
+             g.grad_rate_150_pct, g.grad_rate_pell_pct, g.cohort_entry_year AS graduation_cohort_entry_year,
+             f.pct_pell, f.avg_net_price, f.aid_year
+      FROM __institution AS i
+      LEFT JOIN __fall_enrollment AS e ON e.unitid = i.unitid AND e.ipeds_year = i.ipeds_year
+      LEFT JOIN __admissions AS a ON a.unitid = i.unitid AND a.ipeds_year = i.ipeds_year
+      LEFT JOIN __retention AS r ON r.unitid = i.unitid AND r.ipeds_year = i.ipeds_year
+      LEFT JOIN __graduation AS g ON g.unitid = i.unitid AND g.ipeds_year = i.ipeds_year
+      LEFT JOIN __financial_aid AS f ON f.unitid = i.unitid AND f.ipeds_year = i.ipeds_year
+      WHERE i.ipeds_year = 2023
+        AND i.institution_name = 'Purdue University-Main Campus'
+
+  - name: institution_enrollment_trend
+    audience: enrollment
+    question: How has Indiana University Bloomington's enrollment changed since 2019?
+    notes: comparable_2019_2023 tells the reader whether the unit's definition held over the period.
+    sql: |
+      SELECT e.ipeds_year AS fall, i.institution_name, e.total_enrollment, e.undergrad_enrollment,
+             e.grad_enrollment, e.first_time_undergrad_enrollment, i.comparable_2019_2023
+      FROM __fall_enrollment AS e
+      JOIN __institution AS i ON i.unitid = e.unitid AND i.ipeds_year = e.ipeds_year
+      WHERE i.institution_name = 'Indiana University-Bloomington'
+      ORDER BY fall
+
+  - name: institution_admissions_trend
+    audience: enrollment
+    question: How have applications and admit rates at the University of Michigan changed since 2019?
+    sql: |
+      SELECT a.ipeds_year AS fall, a.applicants, a.admits, a.enrolled, a.admit_rate_pct,
+             a.yield_rate_pct, a.test_policy
+      FROM __admissions AS a
+      JOIN __institution AS i ON i.unitid = a.unitid AND i.ipeds_year = a.ipeds_year
+      WHERE i.institution_name = 'University of Michigan-Ann Arbor'
+      ORDER BY fall
+
+  - name: institution_net_price_by_income
+    audience: enrollment
+    question: What does a family earning $30,000 to $48,000 pay to attend Notre Dame?
+    notes: All five income bands are returned so follow-ups need no new query. 2022-23 aid year.
+    sql: |
+      SELECT i.institution_name, f.aid_year, f.net_price_basis, f.avg_net_price,
+             f.net_price_income_0_30k, f.net_price_income_30_48k, f.net_price_income_48_75k,
+             f.net_price_income_75_110k, f.net_price_income_over_110k
+      FROM __financial_aid AS f
+      JOIN __institution AS i ON i.unitid = f.unitid AND i.ipeds_year = f.ipeds_year
+      WHERE f.ipeds_year = 2023
+        AND i.institution_name = 'University of Notre Dame'
+
+  - name: peer_benchmark_state_public
+    audience: ir
+    question: How does Ball State compare with other Indiana public universities?
+    notes: >-
+      The institution against the median of its in-state public 4-year peers (itself excluded).
+      Medians of institutions, because the question is about a typical peer, not a pooled rate.
+    sql: |
+      WITH base AS (
+        SELECT i.unitid, i.institution_name, r.ft_retention_rate_pct, g.grad_rate_150_pct,
+               g.grad_rate_pell_pct, f.pct_pell, f.avg_net_price
+        FROM __institution AS i
+        LEFT JOIN __retention AS r ON r.unitid = i.unitid AND r.ipeds_year = i.ipeds_year
+        LEFT JOIN __graduation AS g ON g.unitid = i.unitid AND g.ipeds_year = i.ipeds_year
+        LEFT JOIN __financial_aid AS f ON f.unitid = i.unitid AND f.ipeds_year = i.ipeds_year
+        WHERE i.ipeds_year = 2023 AND i.state = 'IN' AND i.sector = 'Public, 4-year or above'
+          AND i.is_reporting_institution = TRUE
+      )
+      SELECT 'Ball State University' AS institution,
+             MAX(IFF(institution_name = 'Ball State University', ft_retention_rate_pct, NULL)) AS ft_retention_rate_pct,
+             MEDIAN(IFF(institution_name <> 'Ball State University', ft_retention_rate_pct, NULL)) AS peer_median_retention,
+             MAX(IFF(institution_name = 'Ball State University', grad_rate_150_pct, NULL)) AS grad_rate_150_pct,
+             MEDIAN(IFF(institution_name <> 'Ball State University', grad_rate_150_pct, NULL)) AS peer_median_grad_rate,
+             MAX(IFF(institution_name = 'Ball State University', pct_pell, NULL)) AS pct_pell,
+             MEDIAN(IFF(institution_name <> 'Ball State University', pct_pell, NULL)) AS peer_median_pct_pell,
+             MAX(IFF(institution_name = 'Ball State University', avg_net_price, NULL)) AS avg_net_price,
+             MEDIAN(IFF(institution_name <> 'Ball State University', avg_net_price, NULL)) AS peer_median_net_price,
+             COUNT_IF(institution_name <> 'Ball State University') AS peers
+      FROM base
+
+  # ---- Counting and distribution ----------------------------------------------------------
+  - name: count_highly_selective
+    audience: enrollment
+    question: How many colleges admit fewer than 20 percent of applicants, and how has that changed?
+    sql: |
+      SELECT a.ipeds_year AS fall, COUNT(*) AS institutions
+      FROM __admissions AS a
+      JOIN __institution AS i ON i.unitid = a.unitid AND i.ipeds_year = a.ipeds_year
+      WHERE i.is_reporting_institution = TRUE
+        AND a.data_quality IS NULL
+        AND a.admit_rate_pct < 20
+      GROUP BY a.ipeds_year
+      ORDER BY fall
+
+  - name: largest_institutions
+    audience: presidents
+    question: What are the largest colleges by enrollment?
+    sql: |
+      SELECT i.institution_name, i.state, i.sector, e.total_enrollment, e.undergrad_enrollment,
+             e.pct_exclusively_online
+      FROM __fall_enrollment AS e
+      JOIN __institution AS i ON i.unitid = e.unitid AND i.ipeds_year = e.ipeds_year
+      WHERE e.ipeds_year = 2023 AND i.is_reporting_institution = TRUE AND e.data_quality IS NULL
+      ORDER BY e.total_enrollment DESC, i.institution_name
+      LIMIT 15
+
+  # ---- Demographics over time -------------------------------------------------------------
+  - name: race_mix_trend_state_sector
+    audience: enrollment
+    question: How has the racial and ethnic makeup of students at Indiana's private nonprofit colleges changed since 2019?
+    notes: Pooled shares of fall headcount. Robert's chained-conversation turn 2.
+    sql: |
+      SELECT e.ipeds_year AS fall,
+             SUM(e.total_enrollment) AS total_enrollment,
+             ROUND(100 * SUM(e.white) / NULLIF(SUM(e.total_enrollment), 0), 1) AS pct_white,
+             ROUND(100 * SUM(e.black) / NULLIF(SUM(e.total_enrollment), 0), 1) AS pct_black,
+             ROUND(100 * SUM(e.hispanic) / NULLIF(SUM(e.total_enrollment), 0), 1) AS pct_hispanic,
+             ROUND(100 * SUM(e.asian) / NULLIF(SUM(e.total_enrollment), 0), 1) AS pct_asian,
+             ROUND(100 * SUM(e.two_or_more_races) / NULLIF(SUM(e.total_enrollment), 0), 1) AS pct_two_or_more,
+             ROUND(100 * SUM(e.nonresident) / NULLIF(SUM(e.total_enrollment), 0), 1) AS pct_international,
+             ROUND(100 * SUM(e.race_unknown) / NULLIF(SUM(e.total_enrollment), 0), 1) AS pct_unknown
+      FROM __fall_enrollment AS e
+      JOIN __institution AS i ON i.unitid = e.unitid AND i.ipeds_year = e.ipeds_year
+      WHERE i.state = 'IN' AND i.sector = 'Private not-for-profit, 4-year or above'
+        AND i.is_reporting_institution = TRUE
+      GROUP BY e.ipeds_year
+      ORDER BY fall
+
+  - name: international_enrollment_trend
+    audience: enrollment
+    question: How has international student enrollment changed since 2019?
+    sql: |
+      SELECT e.ipeds_year AS fall, SUM(e.nonresident) AS international_students,
+             ROUND(100 * SUM(e.nonresident) / NULLIF(SUM(e.total_enrollment), 0), 1) AS pct_of_all_students
+      FROM __fall_enrollment AS e
+      JOIN __institution AS i ON i.unitid = e.unitid AND i.ipeds_year = e.ipeds_year
+      WHERE i.is_reporting_institution = TRUE
+      GROUP BY e.ipeds_year
+      ORDER BY fall
+
+  - name: women_share_by_sector
+    audience: ir
+    question: What share of college students are women, by sector?
+    sql: |
+      SELECT i.sector, SUM(e.total_enrollment) AS students,
+             ROUND(100 * SUM(e.women) / NULLIF(SUM(e.women) + SUM(e.men), 0), 1) AS pct_women
+      FROM __fall_enrollment AS e
+      JOIN __institution AS i ON i.unitid = e.unitid AND i.ipeds_year = e.ipeds_year
+      WHERE e.ipeds_year = 2023 AND i.is_reporting_institution = TRUE
+      GROUP BY i.sector
+      ORDER BY students DESC
+
+  - name: hbcu_enrollment_trend
+    audience: presidents
+    question: How has enrollment at HBCUs changed since 2019?
+    sql: |
+      SELECT e.ipeds_year AS fall, COUNT(DISTINCT e.unitid) AS institutions,
+             SUM(e.total_enrollment) AS total_enrollment, SUM(e.first_time_undergrad_enrollment) AS first_time_undergrads
+      FROM __fall_enrollment AS e
+      JOIN __institution AS i ON i.unitid = e.unitid AND i.ipeds_year = e.ipeds_year
+      WHERE i.is_hbcu = TRUE AND i.is_reporting_institution = TRUE
+      GROUP BY e.ipeds_year
+      ORDER BY fall
+
+  # ---- Outcomes: gaps and trends ----------------------------------------------------------
+  - name: grad_rate_by_race_public
+    audience: presidents
+    question: How do graduation rates differ by race and ethnicity at public 4-year universities?
+    notes: Pooled from race-specific cohorts and completers, fall 2017 entering cohort.
+    sql: |
+      SELECT ROUND(100 * SUM(g.completers_150) / NULLIF(SUM(g.adjusted_cohort), 0), 1) AS all_students,
+             ROUND(100 * SUM(g.white_completers_150) / NULLIF(SUM(g.white_cohort), 0), 1) AS white,
+             ROUND(100 * SUM(g.black_completers_150) / NULLIF(SUM(g.black_cohort), 0), 1) AS black,
+             ROUND(100 * SUM(g.hispanic_completers_150) / NULLIF(SUM(g.hispanic_cohort), 0), 1) AS hispanic,
+             ROUND(100 * SUM(g.asian_completers_150) / NULLIF(SUM(g.asian_cohort), 0), 1) AS asian,
+             SUM(g.adjusted_cohort) AS cohort_students, COUNT(*) AS institutions
+      FROM __graduation AS g
+      JOIN __institution AS i ON i.unitid = g.unitid AND i.ipeds_year = g.ipeds_year
+      WHERE g.ipeds_year = 2023 AND i.sector = 'Public, 4-year or above'
+        AND i.is_reporting_institution = TRUE AND g.data_quality IS NULL
+
+  - name: pell_gap_by_sector
+    audience: presidents
+    question: How big is the graduation gap between Pell and non-Pell students in each sector?
+    sql: |
+      SELECT i.sector,
+             ROUND(100 * SUM(g.pell_completers_150) / NULLIF(SUM(g.pell_cohort), 0), 1) AS pell_grad_rate,
+             ROUND(100 * SUM(g.no_pell_no_loan_completers_150) / NULLIF(SUM(g.no_pell_no_loan_cohort), 0), 1) AS no_pell_no_loan_grad_rate,
+             SUM(g.pell_cohort) AS pell_students
+      FROM __graduation AS g
+      JOIN __institution AS i ON i.unitid = g.unitid AND i.ipeds_year = g.ipeds_year
+      WHERE g.ipeds_year = 2023 AND i.is_reporting_institution = TRUE AND g.data_quality IS NULL
+        AND i.sector IN ('Public, 4-year or above', 'Private not-for-profit, 4-year or above',
+                         'Private for-profit, 4-year or above', 'Public, 2-year')
+      GROUP BY i.sector
+      ORDER BY i.sector
+
+  - name: grad_rate_trend_by_sector
+    audience: ir
+    question: How have graduation rates changed by sector since 2019?
+    notes: Pooled. Each reporting year is a different entering cohort; say so.
+    sql: |
+      SELECT i.sector, g.ipeds_year AS reporting_year, MIN(g.cohort_entry_year) AS cohort_entry_year,
+             ROUND(100 * SUM(g.completers_150) / NULLIF(SUM(g.adjusted_cohort), 0), 1) AS grad_rate_150
+      FROM __graduation AS g
+      JOIN __institution AS i ON i.unitid = g.unitid AND i.ipeds_year = g.ipeds_year
+      WHERE i.is_reporting_institution = TRUE AND g.data_quality IS NULL
+        AND i.sector IN ('Public, 4-year or above', 'Private not-for-profit, 4-year or above', 'Public, 2-year')
+      GROUP BY i.sector, g.ipeds_year
+      ORDER BY i.sector, reporting_year
+
+  - name: retention_trend_by_sector
+    audience: ir
+    question: How has first-year retention changed by sector since 2019?
+    sql: |
+      SELECT i.sector, r.cohort_fall,
+             ROUND(100 * SUM(r.ft_retained) / NULLIF(SUM(r.ft_cohort), 0), 1) AS ft_retention_rate
+      FROM __retention AS r
+      JOIN __institution AS i ON i.unitid = r.unitid AND i.ipeds_year = r.ipeds_year
+      WHERE i.is_reporting_institution = TRUE AND r.data_quality IS NULL
+        AND i.sector IN ('Public, 4-year or above', 'Private not-for-profit, 4-year or above', 'Public, 2-year')
+      GROUP BY i.sector, r.cohort_fall
+      ORDER BY i.sector, r.cohort_fall
+
+  - name: bachelors_on_time_by_sector
+    audience: presidents
+    question: What share of students finish a bachelor's degree in four years, by sector?
+    notes: Bachelor's-seeking subcohort, fall 2017 entrants. The 6-year figure matches NCES Digest table 326.10.
+    sql: |
+      SELECT i.control,
+             ROUND(100 * SUM(g.bachelors_completers_4yr) / NULLIF(SUM(g.bachelors_cohort), 0), 1) AS within_4_years,
+             ROUND(100 * SUM(g.bachelors_completers_6yr) / NULLIF(SUM(g.bachelors_cohort), 0), 1) AS within_6_years,
+             SUM(g.bachelors_cohort) AS bachelors_seeking_students
+      FROM __graduation AS g
+      JOIN __institution AS i ON i.unitid = g.unitid AND i.ipeds_year = g.ipeds_year
+      WHERE g.ipeds_year = 2023 AND i.institution_level = 'Four or more years'
+        AND i.is_reporting_institution = TRUE AND g.data_quality IS NULL
+      GROUP BY i.control
+      ORDER BY i.control
+
+  - name: r1_public_vs_private
+    audience: presidents
+    question: How do R1 research universities compare on retention and graduation, public versus private?
+    sql: |
+      SELECT i.control, COUNT(DISTINCT i.unitid) AS institutions,
+             ROUND(100 * SUM(r.ft_retained) / NULLIF(SUM(r.ft_cohort), 0), 1) AS ft_retention_rate,
+             ROUND(100 * SUM(g.completers_150) / NULLIF(SUM(g.adjusted_cohort), 0), 1) AS grad_rate_150,
+             ROUND(100 * SUM(g.pell_completers_150) / NULLIF(SUM(g.pell_cohort), 0), 1) AS pell_grad_rate
+      FROM __institution AS i
+      LEFT JOIN __retention AS r ON r.unitid = i.unitid AND r.ipeds_year = i.ipeds_year AND r.data_quality IS NULL
+      LEFT JOIN __graduation AS g ON g.unitid = i.unitid AND g.ipeds_year = i.ipeds_year AND g.data_quality IS NULL
+      WHERE i.ipeds_year = 2023
+        AND i.carnegie_basic = 'Doctoral Universities: Very High Research Activity'
+        AND i.is_reporting_institution = TRUE
+      GROUP BY i.control
+      ORDER BY i.control
+
+  - name: retention_by_region
+    audience: ir
+    question: Which region of the country has the highest first-year retention at 4-year colleges?
+    sql: |
+      SELECT i.region, COUNT(*) AS institutions,
+             ROUND(100 * SUM(r.ft_retained) / NULLIF(SUM(r.ft_cohort), 0), 1) AS ft_retention_rate
+      FROM __retention AS r
+      JOIN __institution AS i ON i.unitid = r.unitid AND i.ipeds_year = r.ipeds_year
+      WHERE r.ipeds_year = 2023 AND i.institution_level = 'Four or more years'
+        AND i.is_reporting_institution = TRUE AND r.data_quality IS NULL
+        AND i.region NOT IN ('U.S. Service schools')
+      GROUP BY i.region
+      ORDER BY ft_retention_rate DESC
+
+  - name: state_vs_nation_outcomes
+    audience: presidents
+    question: How does Indiana compare with the nation on retention and graduation at 4-year colleges?
+    sql: |
+      SELECT IFF(i.state = 'IN', 'Indiana', 'Rest of the U.S.') AS area,
+             ROUND(100 * SUM(r.ft_retained) / NULLIF(SUM(r.ft_cohort), 0), 1) AS ft_retention_rate,
+             ROUND(100 * SUM(g.completers_150) / NULLIF(SUM(g.adjusted_cohort), 0), 1) AS grad_rate_150,
+             ROUND(100 * SUM(g.pell_completers_150) / NULLIF(SUM(g.pell_cohort), 0), 1) AS pell_grad_rate
+      FROM __institution AS i
+      LEFT JOIN __retention AS r ON r.unitid = i.unitid AND r.ipeds_year = i.ipeds_year AND r.data_quality IS NULL
+      LEFT JOIN __graduation AS g ON g.unitid = i.unitid AND g.ipeds_year = i.ipeds_year AND g.data_quality IS NULL
+      WHERE i.ipeds_year = 2023 AND i.institution_level = 'Four or more years'
+        AND i.is_reporting_institution = TRUE
+      GROUP BY area
+      ORDER BY area
+
+  # ---- Affordability, selectivity, profile measures ---------------------------------------
+  - name: most_affordable_private_low_income
+    audience: enrollment
+    question: Which private colleges are the most affordable for low-income families?
+    notes: >-
+      Net price for family income $0-30,000, 2022-23 aid year; at least 100 full-time first-time
+      students. A negative net price is real: grant aid exceeded the cost of attendance. Say so.
+    sql: |
+      SELECT i.institution_name, i.state, f.net_price_income_0_30k, f.avg_net_price, f.ftft_cohort
+      FROM __financial_aid AS f
+      JOIN __institution AS i ON i.unitid = f.unitid AND i.ipeds_year = f.ipeds_year
+      WHERE f.ipeds_year = 2023 AND i.sector = 'Private not-for-profit, 4-year or above'
+        AND i.is_reporting_institution = TRUE AND f.data_quality IS NULL
+        AND f.ftft_cohort >= 100 AND f.net_price_income_0_30k IS NOT NULL
+      ORDER BY f.net_price_income_0_30k, i.institution_name
+      LIMIT 15
+
+  - name: selective_colleges_pell_share
+    audience: presidents
+    question: Which selective colleges enroll the largest share of Pell Grant students?
+    notes: >-
+      Admit rate under 25%, at least 1,000 applicants and 1,000 undergraduates; 2022-23 aid year
+      with fall 2023 admissions.
+    sql: |
+      SELECT i.institution_name, i.state, a.admit_rate_pct, f.pct_pell, f.undergrads
+      FROM __admissions AS a
+      JOIN __institution AS i ON i.unitid = a.unitid AND i.ipeds_year = a.ipeds_year
+      JOIN __financial_aid AS f ON f.unitid = a.unitid AND f.ipeds_year = a.ipeds_year
+      WHERE a.ipeds_year = 2023 AND a.admit_rate_pct < 25 AND a.applicants >= 1000 AND f.undergrads >= 1000
+        AND i.is_reporting_institution = TRUE AND a.data_quality IS NULL AND f.data_quality IS NULL
+      ORDER BY f.pct_pell DESC, f.undergrads DESC, i.institution_name
+      LIMIT 15
+
+  - name: highest_sat_scores
+    audience: enrollment
+    question: Which colleges have the highest SAT scores?
+    notes: Sum of the 75th-percentile Math and Evidence-Based Reading and Writing scores of enrolled submitters, fall 2023; at least 500 enrolled.
+    sql: |
+      SELECT i.institution_name, i.state, a.sat_math_75 + a.sat_ebrw_75 AS sat_75th_combined,
+             a.sat_math_25 + a.sat_ebrw_25 AS sat_25th_combined, a.pct_submitting_sat, a.test_policy
+      FROM __admissions AS a
+      JOIN __institution AS i ON i.unitid = a.unitid AND i.ipeds_year = a.ipeds_year
+      WHERE a.ipeds_year = 2023 AND a.enrolled >= 500
+        AND i.is_reporting_institution = TRUE AND a.data_quality IS NULL
+        AND a.sat_math_75 IS NOT NULL AND a.sat_ebrw_75 IS NOT NULL
+      ORDER BY sat_75th_combined DESC, sat_25th_combined DESC, i.institution_name
+      LIMIT 15
+
+  - name: most_online_large_universities
+    audience: ir
+    question: Which large universities have the most students studying fully online?
+    notes: Share enrolled exclusively in distance education, fall 2023; at least 10,000 students.
+    sql: |
+      SELECT i.institution_name, i.state, i.sector, e.total_enrollment, e.pct_exclusively_online
+      FROM __fall_enrollment AS e
+      JOIN __institution AS i ON i.unitid = e.unitid AND i.ipeds_year = e.ipeds_year
+      WHERE e.ipeds_year = 2023 AND e.total_enrollment >= 10000
+        AND i.is_reporting_institution = TRUE AND e.data_quality IS NULL
+      ORDER BY e.pct_exclusively_online DESC, e.total_enrollment DESC, i.institution_name
+      LIMIT 15
+
+  - name: lowest_student_faculty_ratio
+    audience: ir
+    question: Which universities have the lowest student-to-faculty ratio?
+    notes: >-
+      4-year institutions with at least 5,000 students and under half their students fully
+      online, fall 2023. Mostly-online schools (Northcentral, 1:1) report ratios that do not
+      mean the same thing.
+    sql: |
+      SELECT i.institution_name, i.state, r.student_faculty_ratio, e.total_enrollment
+      FROM __retention AS r
+      JOIN __institution AS i ON i.unitid = r.unitid AND i.ipeds_year = r.ipeds_year
+      JOIN __fall_enrollment AS e ON e.unitid = r.unitid AND e.ipeds_year = r.ipeds_year
+      WHERE r.ipeds_year = 2023 AND i.institution_level = 'Four or more years'
+        AND e.total_enrollment >= 5000 AND e.pct_exclusively_online < 50 AND i.is_reporting_institution = TRUE
+        AND r.data_quality IS NULL AND r.student_faculty_ratio IS NOT NULL
+      ORDER BY r.student_faculty_ratio, e.total_enrollment DESC, i.institution_name
+      LIMIT 15

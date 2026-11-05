@@ -1,0 +1,8 @@
+# The public web app only. Build, verification and eval dependencies are in ../requirements.txt.
+streamlit==1.56.0
+snowflake-connector-python>=3.12,<4
+cryptography
+pyjwt
+requests
+pyyaml
+pandas

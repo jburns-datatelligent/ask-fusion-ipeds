@@ -1,0 +1,12 @@
+**/.secrets
+**/.data
+**/__pycache__
+**/.pytest_cache
+**/.DS_Store
+data_validation
+eval
+verify
+build
+tests
+docs
+sql
