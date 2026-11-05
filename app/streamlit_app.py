@@ -51,8 +51,10 @@ st.set_page_config(page_title="Ask Fusion | U.S. college data in plain English |
 
 
 # ---------------------------------------------------------------- resources
-@st.cache_resource
 def settings() -> Settings:
+    # Deliberately NOT cached: it is a handful of env reads. A cached Settings outlived a code update
+    # on Community Cloud (an old object missing a new field crashed the page), and it would also hide
+    # a change to the app's Secrets, such as APP_REQUIRE_CONTACT, until the next reboot.
     return Settings.load()
 
 
