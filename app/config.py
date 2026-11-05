@@ -47,7 +47,7 @@ class Settings:
             store=e("APP_STORE", "local"),
             # Without a configured secret, sign-in links last until the process restarts.
             app_secret=e("APP_SECRET") or _PROCESS_SECRET,
-            per_lead_daily=int(e("APP_PER_LEAD_DAILY", "25")),
+            per_lead_daily=int(e("APP_PER_LEAD_DAILY", "10")),
             global_daily=int(e("APP_GLOBAL_DAILY", "400")),
             deadline_s=int(e("APP_DEADLINE_S", "150")),
             history_turns=int(e("APP_HISTORY_TURNS", "4")),
