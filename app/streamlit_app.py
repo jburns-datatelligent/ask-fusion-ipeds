@@ -165,6 +165,9 @@ def render_gate() -> None:
             'it says so instead of guessing.</span></li>'
             '<li><span>Benchmark your institution against peers, your state or your sector in seconds, '
             'not a week of spreadsheet work.</span></li>'
+            f'<li class="yours"><span><b>Works on your institutional data, too.</b> The same assistant runs on '
+            f'your own student data. <a href="{esc(S.cta_url)}" target="_blank" rel="noopener">'
+            'See how &rarr;</a></span></li>'
             '</ul>'
             '<div class="af-sample">'
             '<div class="q">&ldquo;How do HBCU graduation rates compare with other 4-year institutions?&rdquo;</div>'
@@ -173,6 +176,9 @@ def render_gate() -> None:
             'institutions the rates were <b>36.0%</b> and <b>59.3%</b>. Rates are pooled across institutions.</div>'
             '<div class="src">Source: IPEDS (NCES), Graduation Rates, 2023 collection</div>'
             '</div></div>')
+    # Drawn before the submit is handled, so a form error (which returns early) cannot drop it.
+    # The columns already exist, so it still renders below both of them.
+    your_data_band("gate")
     with right:
         with st.form("lead_form", border=False):
             st.html('<p class="af-form-title">Start asking, free</p>'
@@ -450,14 +456,21 @@ def render_welcome() -> None:
             '</div>')
 
 
-def render_cta_band() -> None:
+def your_data_band(where: str) -> None:
+    """The offer behind the demo: the same assistant on the institution's own data.
+
+    Shown under the form on the landing page and on every screen of the tool. It is the
+    point of the public app, so it is a filled band, not a footnote."""
     st.html(
-        '<div class="af-sample" style="margin-top:2rem;display:flex;flex-wrap:wrap;gap:1rem;align-items:center;'
-        'justify-content:space-between">'
-        '<div><div class="q">Imagine this on your own student data.</div>'
-        '<div class="a">Ask Fusion runs inside your Snowflake account on your SIS, CRM and LMS data: retention risk, '
-        'yield, course outcomes, answered the same way, with the query shown.</div></div>'
-        f'<a class="af-cta" href="{esc(S.cta_url)}" target="_blank" rel="noopener">Talk to Datatelligent &rarr;</a></div>')
+        f'<div class="af-yourdata af-yourdata--{where}">'
+        '<div class="body">'
+        '<span class="kicker">For your institution</span>'
+        '<div class="title">We can do this on your institutional data, too.</div>'
+        '<p>This demo answers from public IPEDS data. Datatelligent runs the same assistant on your own '
+        'SIS, CRM and LMS data, inside your Snowflake account: retention risk, yield, course outcomes '
+        'and more, answered the same way, with the query shown.</p></div>'
+        f'<a class="af-cta-solid" href="{esc(S.cta_url)}" target="_blank" rel="noopener">'
+        'Talk to us about your data &rarr;</a></div>')
 
 
 # ---------------------------------------------------------------- page
@@ -498,8 +511,8 @@ if not ss.lead.get("anonymous"):
 # progress steps, greyed out as stale, for the whole wait.
 conversation = st.container()
 
-if ss.messages and not ss.pending:
-    render_cta_band()
+if not ss.pending:
+    your_data_band("tool")
 
 with conversation:
     if not ss.messages and not ss.pending:

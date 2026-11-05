@@ -151,6 +151,24 @@ a {{ color: var(--dt-orange-text); }}
   border:1.5px solid var(--dt-orange); color: var(--dt-orange-text) !important; font-weight:600;
   font-size:.85rem; text-decoration:none !important; white-space:nowrap; background:#fff; }}
 .af-cta:hover {{ background: #fff4ef; }}
+/* the header link is the offer, so it is filled, not outlined. Brown on orange is 5.7:1 (AA). */
+.af-topbar .af-cta {{ background: var(--dt-orange); border-color: var(--dt-orange); color: #3b1d17 !important; }}
+.af-topbar .af-cta:hover {{ background: #ff8a5c; }}
+
+/* ---------- "your data" band: the offer behind the demo */
+.af-yourdata {{ display:flex; flex-wrap:wrap; gap:1rem 1.75rem; align-items:center; justify-content:space-between;
+  background: var(--dt-dark); color:#fff; border-radius: var(--dt-radius); padding: 1.35rem 1.6rem;
+  margin: 2rem 0 .5rem; box-shadow: var(--dt-shadow); border-left: 6px solid var(--dt-orange); }}
+.af-yourdata .body {{ flex: 1 1 26rem; min-width:0; }}
+.af-yourdata .kicker {{ display:block; font-size:.72rem; font-weight:700; letter-spacing:.08em;
+  text-transform:uppercase; color:#ffb999; margin-bottom:.3rem; }}
+.af-yourdata .title {{ font-size: 1.3rem; font-weight:700; line-height:1.25; color:#fff; margin-bottom:.4rem; }}
+.af-yourdata p {{ font-size:.92rem; line-height:1.55; color:#dbe3e8; margin:0; }}
+.af-cta-solid {{ display:inline-flex; align-items:center; gap:.4rem; padding:.75rem 1.2rem; border-radius:10px;
+  background: var(--dt-orange); color:#3b1d17 !important; font-weight:700; font-size:.95rem;
+  text-decoration:none !important; white-space:nowrap; }}
+.af-cta-solid:hover {{ background:#ff8a5c; }}
+.af-proof li.yours a {{ color: var(--dt-orange-text); font-weight:600; }}
 
 /* ---------- hero (gate) */
 .af-eyebrow {{ display:inline-block; font-size:.75rem; font-weight:700; letter-spacing:.08em;
@@ -300,6 +318,7 @@ button[kind="primary"]:hover, [data-testid="stBaseButton-primaryFormSubmit"]:hov
   .af-cta {{ padding:.4rem .7rem; font-size:.78rem; }}
   .af-cta .long {{ display:none; }} .af-cta .short {{ display:inline; }}
   .af-bottom-note {{ font-size:.66rem; }}
+  .af-yourdata {{ padding: 1.1rem 1.1rem; }} .af-cta-solid {{ white-space: normal; }}
   [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) [data-testid="stChatMessageContent"] {{ max-width: 92%; }}
 }}
 </style>
